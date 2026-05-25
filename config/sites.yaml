@@ -30,5 +30,11 @@ sites:
     fetch_method: playwright
     notes: ""
 
+  - id: egbiz
+    name: 이지비즈
+    url: https://www.egbiz.or.kr/index.do
+    enabled: true
+    fetch_method: playwright
+    notes: "봇 차단으로 playwright 필요"
+
 # 추가 예정 사이트는 여기에 계속 append
-# 이즈비즈 URL 확인 후 추가 예정

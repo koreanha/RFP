@@ -4,6 +4,7 @@ from crawlers.g2b import G2BCrawler
 from crawlers.bizinfo import BizinfoCrawler
 from crawlers.ripc import RIPCCrawler
 from crawlers.seouldesign import SeoulDesignCrawler
+from crawlers.egbiz import EgbizCrawler
 
 # 새 크롤러 추가 시 여기에 한 줄만 추가
 _CRAWLERS: Dict[str, Type[BaseCrawler]] = {
@@ -11,6 +12,7 @@ _CRAWLERS: Dict[str, Type[BaseCrawler]] = {
     "bizinfo":     BizinfoCrawler,
     "ripc":        RIPCCrawler,
     "seouldesign": SeoulDesignCrawler,
+    "egbiz":       EgbizCrawler,
 }
 
 
