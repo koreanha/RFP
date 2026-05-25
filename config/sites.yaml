@@ -1,0 +1,34 @@
+# 크롤링 대상 사이트 목록
+# 새 사이트 추가: 아래 형식으로 항목 추가 후 crawlers/ 에 동일 id의 파일 생성
+sites:
+  - id: g2b
+    name: 나라장터
+    url: https://www.g2b.go.kr/
+    enabled: true
+    fetch_method: api          # api | requests | playwright
+    notes: "공공데이터포털 OpenAPI 사용 (API 키 필요: G2B_API_KEY)"
+
+  - id: bizinfo
+    name: 기업마당
+    url: https://www.bizinfo.go.kr/web/index.do
+    enabled: true
+    fetch_method: playwright
+    notes: "봇 차단으로 playwright 필요"
+
+  - id: ripc
+    name: RIPC
+    url: https://pms.ripc.org/loginMain.do
+    enabled: false             # 로그인 필요 — 크리덴셜 설정 후 true로 변경
+    fetch_method: playwright
+    login_required: true
+    notes: "RIPC_USERNAME / RIPC_PASSWORD 환경변수 필요"
+
+  - id: seouldesign
+    name: 서울디자인재단
+    url: https://seouldesign.or.kr/?menuno=150
+    enabled: true
+    fetch_method: playwright
+    notes: ""
+
+# 추가 예정 사이트는 여기에 계속 append
+# 이즈비즈 URL 확인 후 추가 예정
