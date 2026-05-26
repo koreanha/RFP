@@ -1,15 +1,21 @@
 """나라장터 크롤러.
 
-진단 결과: iframe 6개 구조, 링크가 javascript:void(null) → JS 기반 내비게이션.
-전략: 메인 페이지 로드 후 각 iframe을 순회하며 검색 form을 찾아 키워드 검색.
+진단 결과:
+- iframe 6개이지만 frames[2-5]는 about:blank
+- frames[1]은 WebSquare 유틸리티 (검색 form 없음)
+- 메인 페이지에 검색 input 존재 (name='', placeholder='검색어를 입력해 주세요.')
+- 모든 링크가 javascript:void(null) → WebSquare JS 프레임워크
+- 전략: 입찰공고목록 직접 URL로 이동 후 검색 input 사용
 """
 import hashlib
 from typing import List
 from models.posting import Posting
 from crawlers.base import BaseCrawler
 from utils.browser import new_page
+from filter import is_relevant
 
 _HOME = "https://www.g2b.go.kr/"
+_BID_LIST_URL = "https://www.g2b.go.kr:8101/ep/tbid/tbidFwd.do?taskClCd=5"
 _SEARCH_KEYWORDS = ["디자인", "그래픽", "UX", "브랜드", "영상제작"]
 _MAX_PAGES = 3
 
@@ -21,20 +27,11 @@ class G2BCrawler(BaseCrawler):
         postings = []
         try:
             with new_page() as page:
-                page.goto(_HOME, timeout=30000, wait_until="networkidle")
-                page.wait_for_timeout(3000)
-
-                # iframe 중 검색 form이 있는 frame 찾기
-                search_frame = self._find_search_frame(page)
-
-                if search_frame is None:
-                    print("  [g2b] 검색 frame을 찾지 못했습니다. diagnose.py --frames 실행 권장")
-                    return []
-
                 for kw in _SEARCH_KEYWORDS:
                     try:
-                        results = self._search_in_frame(search_frame, kw)
+                        results = self._search_keyword(page, kw)
                         postings.extend(results)
+                        print(f"  [g2b] '{kw}' → {len(results)}건")
                     except Exception as e:
                         print(f"  [g2b] '{kw}' 오류: {e}")
 
@@ -43,75 +40,113 @@ class G2BCrawler(BaseCrawler):
 
         return self._deduplicate(postings)
 
-    def _find_search_frame(self, page):
-        """입찰공고 검색창이 있는 iframe 탐색."""
-        # 메인 페이지 자체에서 먼저 시도
-        if page.query_selector("input[name='bidNtceNm'], input[placeholder*='공고명']"):
-            return page
+    def _search_keyword(self, page, keyword: str) -> List[Posting]:
+        # 입찰공고 목록 직접 접근 시도
+        page.goto(_BID_LIST_URL, timeout=30000, wait_until="domcontentloaded")
+        page.wait_for_timeout(3000)
 
-        # 각 iframe 순회
-        for frame in page.frames[1:]:
-            try:
-                if frame.query_selector(
-                    "input[name='bidNtceNm'], input[placeholder*='공고명'], "
-                    "input[name='searchNm'], form[name*='bid']"
-                ):
-                    return frame
-            except Exception:
-                continue
-
-        # 못 찾은 경우: 입찰공고목록 링크 클릭 후 재탐색
-        try:
-            bid_link = page.query_selector("a:has-text('입찰공고목록'), a:has-text('입찰공고')")
-            if bid_link:
-                bid_link.click()
-                page.wait_for_timeout(2000)
-                for frame in page.frames[1:]:
-                    try:
-                        if frame.query_selector("input[name='bidNtceNm']"):
-                            return frame
-                    except Exception:
-                        continue
-        except Exception:
-            pass
-
-        return None
-
-    def _search_in_frame(self, ctx, keyword: str) -> List[Posting]:
-        postings = []
-
-        inp = ctx.query_selector("input[name='bidNtceNm'], input[placeholder*='공고명'], input[name='searchNm']")
-        if not inp:
-            return []
+        # 검색 input 탐색 (메인 + iframe 모두)
+        ctx, inp = self._find_search_input(page)
+        if ctx is None or inp is None:
+            # 홈에서 입찰공고목록 메뉴 클릭 시도
+            ctx, inp = self._try_from_home(page)
+            if ctx is None or inp is None:
+                print(f"  [g2b] 검색창을 찾지 못함")
+                return []
 
         inp.triple_click()
         inp.fill(keyword)
 
-        # 검색 버튼 또는 Enter
-        btn = ctx.query_selector("button[type='submit'], input[type='submit'], a.btn-search")
+        btn = ctx.query_selector(
+            "button[type='submit'], input[type='submit'], "
+            "a.btn-search, button.btn-search, .search-btn"
+        )
         if btn:
             btn.click()
         else:
             inp.press("Enter")
 
-        ctx.wait_for_timeout(2000)
+        page.wait_for_timeout(3000)
 
+        postings = []
         for page_no in range(1, _MAX_PAGES + 1):
-            rows = ctx.query_selector_all("table tbody tr")
-            if not rows:
+            rows_found = self._parse_all_contexts(page, postings)
+            if not rows_found:
                 break
-            for row in rows:
-                p = self._parse_row(row)
-                if p:
-                    postings.append(p)
-            # 다음 페이지
-            nxt = ctx.query_selector(f"a:has-text('{page_no + 1}'), a.next, a[title='다음']")
+            nxt = self._find_next_button(page, page_no)
             if not nxt:
                 break
             nxt.click()
-            ctx.wait_for_timeout(1500)
+            page.wait_for_timeout(2000)
 
         return postings
+
+    def _find_search_input(self, page):
+        """메인 페이지 + 각 iframe에서 공고명 검색 input 탐색."""
+        selectors = [
+            "input[name='bidNtceNm']",
+            "input[placeholder*='공고명']",
+            "input[placeholder*='검색어']",
+            "input[name='searchNm']",
+        ]
+        contexts = [page] + [f for f in page.frames if f != page.main_frame]
+        for ctx in contexts:
+            try:
+                for sel in selectors:
+                    el = ctx.query_selector(sel)
+                    if el:
+                        return ctx, el
+            except Exception:
+                continue
+        return None, None
+
+    def _try_from_home(self, page):
+        """홈에서 입찰공고 메뉴 클릭 후 재탐색."""
+        try:
+            page.goto(_HOME, timeout=30000, wait_until="domcontentloaded")
+            page.wait_for_timeout(3000)
+            bid_link = page.query_selector(
+                "a:has-text('입찰공고목록'), a:has-text('입찰공고')"
+            )
+            if bid_link:
+                bid_link.click()
+                page.wait_for_timeout(3000)
+                return self._find_search_input(page)
+        except Exception:
+            pass
+        return None, None
+
+    def _parse_all_contexts(self, page, postings: List[Posting]) -> int:
+        """모든 context(메인+iframe)에서 행 파싱. 파싱된 건수 반환."""
+        count = 0
+        contexts = [page] + [f for f in page.frames if f != page.main_frame]
+        for ctx in contexts:
+            try:
+                rows = ctx.query_selector_all("table tbody tr")
+                for row in rows:
+                    p = self._parse_row(row)
+                    if p:
+                        postings.append(p)
+                        count += 1
+                if count:
+                    break
+            except Exception:
+                continue
+        return count
+
+    def _find_next_button(self, page, current_page: int):
+        contexts = [page] + [f for f in page.frames if f != page.main_frame]
+        for ctx in contexts:
+            try:
+                nxt = ctx.query_selector(
+                    f"a:has-text('{current_page + 1}'), "
+                    "a.next, a[title='다음페이지'], a[title='다음']"
+                )
+                if nxt:
+                    return nxt
+            except Exception:
+                continue
+        return None
 
     def _parse_row(self, row):
         title_el = row.query_selector("td a")
@@ -119,6 +154,10 @@ class G2BCrawler(BaseCrawler):
             return None
         title = title_el.inner_text().strip()
         if not title or title in ("이전", "다음", "처음", "마지막"):
+            return None
+
+        result = is_relevant(title)
+        if not result.matched or result.stage == "excluded":
             return None
 
         href = title_el.get_attribute("href") or ""
@@ -134,6 +173,8 @@ class G2BCrawler(BaseCrawler):
             url=full_url,
             deadline=deadline,
             organization=org,
+            relevance_score=result.score,
+            matched_keywords=result.matched_keywords,
         )
 
     def _find_deadline(self, cells) -> str:

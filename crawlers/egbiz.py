@@ -2,9 +2,9 @@
 
 진단 결과:
 - 사이트명: 경기기업비서 (egbiz.or.kr)
-- 올바른 목록 URL: /sp/supportPrjCatList.do (분야별 지원사업)
-- SPA 구조 (iframe 3개, table 없음) → 검색창 입력 후 동적 로딩 대기
-- 검색창 placeholder: '검색어를 입력해 주세요.'
+- 목록 URL: /sp/supportPrjCatList.do (분야별 지원사업)
+- 카드형 레이아웃 (table 없음)
+- 검색창 placeholder: '지원사업명으로 조회'
 """
 import hashlib
 from typing import List
@@ -16,6 +16,14 @@ from filter import is_relevant
 _LIST_URL = "https://www.egbiz.or.kr/sp/supportPrjCatList.do"
 _BASE = "https://www.egbiz.or.kr"
 _SEARCH_TERMS = ["디자인", "제품디자인", "디자인컨설팅"]
+
+# 카드형 아이템 셀렉터 우선순위 목록 (진단 화면에서 확인)
+_CARD_SELECTORS = [
+    ".support-item", ".card-item", ".list-item",
+    ".prj-item", ".item", "li.card", "li.item",
+    ".contents-list li", ".result-list li",
+    ".board-list li", "ul.list li",
+]
 
 
 class EgbizCrawler(BaseCrawler):
@@ -40,42 +48,54 @@ class EgbizCrawler(BaseCrawler):
         page.goto(_LIST_URL, timeout=30000, wait_until="networkidle")
         page.wait_for_timeout(2000)
 
-        # 검색창 입력
-        inp = page.query_selector(
-            "input[placeholder='검색어를 입력해 주세요.'], "
-            "input[type='search'], input[name='searchNm']"
+        # 검색창 입력 (placeholder 확인됨: '지원사업명으로 조회')
+        inp = (
+            page.query_selector("input[placeholder='지원사업명으로 조회']")
+            or page.query_selector("input[placeholder*='조회']")
+            or page.query_selector("input[placeholder*='검색']")
+            or page.query_selector("input[type='search']")
+            or page.query_selector("input[name='searchNm']")
         )
         if inp:
             inp.triple_click()
             inp.fill(keyword)
             page.keyboard.press("Enter")
             page.wait_for_timeout(3000)  # SPA 렌더링 대기
+        else:
+            print(f"  [egbiz] 검색창 없음 — 전체 목록 파싱")
 
         return self._parse_all_contexts(page)
 
     def _parse_all_contexts(self, page) -> List[Posting]:
-        """메인 페이지 + iframe 모두에서 공고 파싱."""
         postings = []
         contexts = [page] + [f for f in page.frames if f != page.main_frame]
         for ctx in contexts:
             try:
-                postings.extend(self._parse_context(ctx))
+                found = self._parse_context(ctx)
+                postings.extend(found)
             except Exception:
                 pass
         return postings
 
     def _parse_context(self, ctx) -> List[Posting]:
+        # 카드/리스트형 아이템 탐색
+        items = []
+        for sel in _CARD_SELECTORS:
+            items = ctx.query_selector_all(sel)
+            if items:
+                break
+
+        # 카드도 없으면 테이블 tr로 폴백
+        if not items:
+            items = ctx.query_selector_all("table tbody tr")
+
         postings = []
-
-        # 카드형 또는 리스트형 아이템 탐색
-        items = (
-            ctx.query_selector_all(".card, .list-item, .support-item, .prj-item")
-            or ctx.query_selector_all("li.item, ul.list li, .result-item")
-            or ctx.query_selector_all("table tbody tr")
-        )
-
         for item in items:
-            title_el = item.query_selector("a, .tit, .title, h3, h4")
+            title_el = (
+                item.query_selector(".tit, .title, .subject")
+                or item.query_selector("a strong, a span, a")
+                or item.query_selector("h3, h4, h5")
+            )
             if not title_el:
                 continue
             title = title_el.inner_text().strip()
@@ -86,16 +106,22 @@ class EgbizCrawler(BaseCrawler):
             if not result.matched or result.stage == "excluded":
                 continue
 
+            # href 탐색: title_el 자체 or 가장 가까운 a
             href = title_el.get_attribute("href") or ""
             if not href:
-                # 부모 a 태그 탐색
                 parent_a = item.query_selector("a")
                 href = parent_a.get_attribute("href") if parent_a else ""
 
             full_url = href if href.startswith("http") else f"{_BASE}{href}"
 
-            date_el = item.query_selector(".date, .period, .deadline, td:last-child")
+            date_el = item.query_selector(
+                ".date, .period, .deadline, .end-date, "
+                ".apply-date, td:last-child, span.date"
+            )
             deadline = date_el.inner_text().strip() if date_el else None
+
+            org_el = item.query_selector(".org, .agency, .inst, .institution")
+            org = org_el.inner_text().strip() if org_el else None
 
             postings.append(Posting(
                 source_id=self.site_id,
@@ -103,6 +129,7 @@ class EgbizCrawler(BaseCrawler):
                 title=title,
                 url=full_url,
                 deadline=deadline,
+                organization=org,
                 relevance_score=result.score,
                 matched_keywords=result.matched_keywords,
             ))

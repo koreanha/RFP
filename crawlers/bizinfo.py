@@ -42,8 +42,11 @@ class BizinfoCrawler(BaseCrawler):
         page.goto(_SEARCH_BASE, timeout=30000, wait_until="domcontentloaded")
         page.wait_for_timeout(1500)
 
-        # 검색창에 키워드 직접 입력 후 Enter
-        inp = page.query_selector("input[placeholder='검색어를 입력해 주세요.']")
+        # 검색창에 키워드 직접 입력 후 Enter (name='keyword' 확인됨)
+        inp = (
+            page.query_selector("input[name='keyword']")
+            or page.query_selector("input[placeholder='검색어를 입력해 주세요.']")
+        )
         if not inp:
             print(f"  [bizinfo] 검색창을 찾지 못함")
             return []

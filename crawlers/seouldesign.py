@@ -1,17 +1,20 @@
 """서울디자인재단 크롤러.
 
-진단 결과: menuno=150은 메인 홈페이지.
-공고 목록 실제 URL: menuno=18 (입찰공고 게시판, boardno=19)
-공고 링크 패턴: ?menuno=18&...&bbsno=XXXX&act=view
+진단 결과:
+- URL: menuno=18 (입찰정보 게시판)
+- 테이블 컬럼: [0]번호 [1]제목(링크) [2]첨부파일 [3]조회수 [4]등록일
+- 링크는 tbody tr > td:nth-child(2) > a 에 위치
 """
 import hashlib
 from typing import List
 from models.posting import Posting
 from crawlers.base import BaseCrawler
 from utils.browser import new_page
+from filter import is_relevant
 
 _LIST_URL = "https://seouldesign.or.kr/?menuno=18&siteno=1&boardno=19&cates=132"
 _BASE = "https://seouldesign.or.kr"
+_MAX_PAGES = 5
 
 
 class SeoulDesignCrawler(BaseCrawler):
@@ -24,56 +27,80 @@ class SeoulDesignCrawler(BaseCrawler):
                 page.goto(_LIST_URL, timeout=30000, wait_until="networkidle")
                 page.wait_for_timeout(3000)
 
-                # 메인 페이지 + 모든 iframe 에서 공고 링크 수집
-                contexts = [page] + [f for f in page.frames if f != page.main_frame]
-                for ctx in contexts:
-                    try:
-                        postings.extend(self._extract_links(ctx))
-                    except Exception:
-                        pass
+                for page_no in range(1, _MAX_PAGES + 1):
+                    rows = self._parse_rows(page)
+                    postings.extend(rows)
+                    if not rows or not self._go_next_page(page, page_no):
+                        break
 
         except Exception as e:
             print(f"[seouldesign] 크롤링 오류: {e}")
 
         return self._deduplicate(postings)
 
-    def _extract_links(self, ctx) -> List[Posting]:
-        """공고 상세 링크(bbsno= 포함)를 찾아 Posting 생성."""
+    def _parse_rows(self, page) -> List[Posting]:
+        """
+        테이블 컬럼: [0]번호 [1]제목(링크) [2]첨부파일 [3]조회수 [4]등록일
+        메인 페이지와 iframe 모두 시도.
+        """
         postings = []
-        try:
-            links = ctx.query_selector_all("a[href*='bbsno=']")
-            for link in links:
-                href = link.get_attribute("href") or ""
-                if "act=view" not in href:
+        contexts = [page] + [f for f in page.frames if f != page.main_frame]
+        for ctx in contexts:
+            try:
+                rows = ctx.query_selector_all("table tbody tr")
+                if not rows:
                     continue
-                title = link.inner_text().strip()
-                # 날짜/숫자만 있는 링크 제거
-                if not title or len(title) < 6 or title.isdigit():
-                    continue
+                for row in rows:
+                    cells = row.query_selector_all("td")
+                    if len(cells) < 2:
+                        continue
+                    title_el = cells[1].query_selector("a")
+                    if not title_el:
+                        continue
+                    title = title_el.inner_text().strip()
+                    if not title or len(title) < 4 or title.isdigit():
+                        continue
 
-                full_url = href if href.startswith("http") else f"{_BASE}{href}"
-                post_id = self._extract_post_id(href) or self._hash(title)
+                    result = is_relevant(title)
+                    if not result.matched or result.stage == "excluded":
+                        continue
 
-                # 날짜 요소 탐색 (형제 요소에서)
-                try:
-                    parent = link.evaluate("el => el.closest('li, tr, .item, .board-item')")
-                    date_el = ctx.query_selector(
-                        f"[data-bbsno='{post_id}'] .date, .period"
-                    ) if parent else None
-                    deadline = date_el.inner_text().strip() if date_el else None
-                except Exception:
-                    deadline = None
+                    href = title_el.get_attribute("href") or ""
+                    full_url = href if href.startswith("http") else f"{_BASE}{href}"
+                    post_id = self._extract_post_id(href) or self._hash(title)
+                    deadline = cells[4].inner_text().strip() if len(cells) > 4 else None
 
-                postings.append(Posting(
-                    source_id=self.site_id,
-                    post_id=post_id,
-                    title=title,
-                    url=full_url,
-                    deadline=deadline,
-                ))
-        except Exception:
-            pass
+                    postings.append(Posting(
+                        source_id=self.site_id,
+                        post_id=post_id,
+                        title=title,
+                        url=full_url,
+                        deadline=deadline,
+                        relevance_score=result.score,
+                        matched_keywords=result.matched_keywords,
+                    ))
+                if postings:
+                    break  # 첫 번째 유효한 context 사용
+            except Exception:
+                continue
         return postings
+
+    def _go_next_page(self, page, current_page: int) -> bool:
+        contexts = [page] + [f for f in page.frames if f != page.main_frame]
+        for ctx in contexts:
+            try:
+                nxt = ctx.query_selector(
+                    f"a:has-text('{current_page + 1}'), "
+                    "a.next, a[title='다음페이지'], a[title='다음']"
+                )
+                if nxt:
+                    nxt.click()
+                    page.wait_for_load_state("networkidle", timeout=8000)
+                    page.wait_for_timeout(1500)
+                    return True
+            except Exception:
+                continue
+        return False
 
     def _extract_post_id(self, href: str) -> str:
         for sep in ["bbsno=", "bbsIdx=", "seq=", "idx=", "no="]:

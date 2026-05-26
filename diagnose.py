@@ -65,15 +65,13 @@ def diagnose(site_id: str, url: str):
                             print(f"\n[{frame_label}] 발견: {sel}  ({len(children)}개 자식)")
                             break
 
-                    # 검색 input
-                    for sel in ["input[placeholder*='검색']", "input[type='search']",
-                                 "input[name='searchNm']", "input[name='bidNtceNm']"]:
-                        el = ctx.query_selector(sel)
-                        if el:
-                            ph = el.get_attribute("placeholder") or ""
-                            nm = el.get_attribute("name") or ""
+                    # 검색 input (모든 input 출력)
+                    all_inputs = ctx.query_selector_all("input[type='text'], input[type='search'], input:not([type])")
+                    for inp_el in all_inputs[:5]:
+                        ph = inp_el.get_attribute("placeholder") or ""
+                        nm = inp_el.get_attribute("name") or ""
+                        if ph or nm:
                             print(f"[{frame_label}] 검색 input: placeholder='{ph}'  name='{nm}'")
-                            break
 
                     # 링크 샘플 (공고·지원 관련)
                     all_links = ctx.eval_on_selector_all(
