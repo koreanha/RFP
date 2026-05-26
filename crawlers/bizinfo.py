@@ -56,8 +56,21 @@ class BizinfoCrawler(BaseCrawler):
             return []
         print(f"  [bizinfo] 검색창 발견 name='{inp.get_attribute('name')}'")
         inp.fill(keyword)   # fill()은 기존 내용을 지우고 교체
-        page.keyboard.press("Enter")
-        page.wait_for_timeout(4000)  # networkidle 대신 고정 대기 (AJAX 렌더링)
+
+        # 검색 버튼 클릭 시도 (Enter만으론 검색 미작동)
+        btn = page.query_selector(
+            "button[type='submit'], input[type='submit'], "
+            "button.btn-search, a.btn-search, "
+            "button:has-text('검색'), a:has-text('검색'), "
+            ".search-btn, #searchBtn, button.search"
+        )
+        if btn:
+            btn.click()
+            print(f"  [bizinfo] 검색 버튼 클릭")
+        else:
+            page.keyboard.press("Enter")
+            print(f"  [bizinfo] Enter 키 입력 (버튼 미발견)")
+        page.wait_for_timeout(4000)  # AJAX 렌더링 대기
 
         postings = []
         for page_no in range(1, _MAX_PAGES + 1):

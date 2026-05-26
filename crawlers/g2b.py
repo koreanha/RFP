@@ -15,7 +15,6 @@ from utils.browser import new_page
 from filter import is_relevant
 
 _HOME = "https://www.g2b.go.kr/"
-_BID_LIST_URL = "https://www.g2b.go.kr:8101/ep/tbid/tbidFwd.do?taskClCd=5"
 _SEARCH_KEYWORDS = ["디자인", "그래픽", "UX", "브랜드", "영상제작"]
 _MAX_PAGES = 3
 
@@ -41,14 +40,14 @@ class G2BCrawler(BaseCrawler):
         return self._deduplicate(postings)
 
     def _search_keyword(self, page, keyword: str) -> List[Posting]:
-        # 입찰공고 목록 직접 접근 시도
-        page.goto(_BID_LIST_URL, timeout=30000, wait_until="domcontentloaded")
-        page.wait_for_timeout(3000)
+        # 홈 로드 후 검색창 탐색
+        page.goto(_HOME, timeout=30000, wait_until="domcontentloaded")
+        page.wait_for_timeout(4000)
 
         # 검색 input 탐색 (메인 + iframe 모두)
         ctx, inp = self._find_search_input(page)
         if ctx is None or inp is None:
-            # 홈에서 입찰공고목록 메뉴 클릭 시도
+            # 입찰공고 메뉴 클릭 후 재탐색
             ctx, inp = self._try_from_home(page)
             if ctx is None or inp is None:
                 frames_info = [(i, f.url[:60]) for i, f in enumerate(page.frames)]
@@ -105,16 +104,15 @@ class G2BCrawler(BaseCrawler):
         return None, None
 
     def _try_from_home(self, page):
-        """홈에서 입찰공고 메뉴 클릭 후 재탐색."""
+        """입찰공고 메뉴 클릭 후 재탐색 (이미 홈에 있음)."""
         try:
-            page.goto(_HOME, timeout=30000, wait_until="domcontentloaded")
-            page.wait_for_timeout(3000)
             bid_link = page.query_selector(
-                "a:has-text('입찰공고목록'), a:has-text('입찰공고')"
+                "a:has-text('입찰공고목록'), a:has-text('입찰공고'), "
+                "a:has-text('용역'), a:has-text('물품')"
             )
             if bid_link:
                 bid_link.click()
-                page.wait_for_timeout(3000)
+                page.wait_for_timeout(4000)
                 return self._find_search_input(page)
         except Exception:
             pass

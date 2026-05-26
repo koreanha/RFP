@@ -59,8 +59,7 @@ class EgbizCrawler(BaseCrawler):
         if inp:
             ph = inp.get_attribute("placeholder") or inp.get_attribute("name") or "?"
             print(f"  [egbiz] 검색창 발견: '{ph}'")
-            inp.triple_click()
-            inp.fill(keyword)
+            inp.fill(keyword)  # fill()은 기존 값 지우고 입력 (ElementHandle 호환)
             page.keyboard.press("Enter")
             page.wait_for_timeout(3000)  # SPA 렌더링 대기
         else:
