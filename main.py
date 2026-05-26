@@ -44,7 +44,7 @@ def setup_logging():
 
 
 def load_enabled_sites(filter_ids: list = None) -> list:
-    with open(CONFIG_PATH) as f:
+    with open(CONFIG_PATH, encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
     sites = [s for s in cfg["sites"] if s.get("enabled", True)]
     if filter_ids:
