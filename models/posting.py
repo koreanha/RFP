@@ -13,6 +13,8 @@ class Posting:
     organization: Optional[str] = None
     category: Optional[str] = None
     description: Optional[str] = None
+    relevance_score: int = 0              # 매칭된 키워드 수 (높을수록 관련성 높음)
+    matched_keywords: list = field(default_factory=list)  # 매칭된 키워드 목록
     crawled_at: datetime = field(default_factory=datetime.now)
 
     @property
