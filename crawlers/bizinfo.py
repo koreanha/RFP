@@ -47,8 +47,7 @@ class BizinfoCrawler(BaseCrawler):
         if not inp:
             print(f"  [bizinfo] 검색창을 찾지 못함")
             return []
-        inp.triple_click()
-        inp.fill(keyword)
+        inp.fill(keyword)   # fill()은 기존 내용을 지우고 교체
         page.keyboard.press("Enter")
         page.wait_for_load_state("networkidle", timeout=12000)
         page.wait_for_timeout(1000)
