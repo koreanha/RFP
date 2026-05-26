@@ -1,24 +1,13 @@
-"""기업마당 크롤러 — playwright 브라우저 직접 탐색 방식.
-
-URL: https://www.bizinfo.go.kr/
-전략:
-  1. 키워드별 검색 URL로 직접 이동 → 제목 1차 필터
-  2. 관련 공고 상세 페이지 방문 → 본문(지원범위·과업범위) 2차 필터
-  3. relevance_score로 정렬 저장
-
-실행 환경: 반드시 로컬에서 실행.
-"""
+"""기업마당 크롤러 — playwright 브라우저 직접 탐색 방식."""
 import hashlib
 from typing import List, Optional
 from models.posting import Posting
 from crawlers.base import BaseCrawler
 from utils.browser import new_page
-from filter import is_relevant, TITLE_KEYWORDS
+from filter import is_relevant
 
 _SEARCH_BASE = "https://www.bizinfo.go.kr/web/lay1/bbs/S1T122C128/AS/74/list.do"
 _MAX_PAGES = 5
-
-# 검색창에 넣을 키워드 (너무 많으면 중복 결과 과다 → 대표 키워드만)
 _SEARCH_TERMS = [
     "제품디자인", "산업디자인", "디자인컨설팅",
     "디자인R&D", "디자인바우처", "디자인 고도화",
@@ -29,20 +18,18 @@ class BizinfoCrawler(BaseCrawler):
     site_id = "bizinfo"
 
     def fetch(self) -> List[Posting]:
-        page, browser = new_page()
         postings = []
         try:
-            for keyword in _SEARCH_TERMS:
-                try:
-                    results = self._fetch_keyword(page, keyword)
-                    postings.extend(results)
-                    print(f"  [bizinfo] '{keyword}' → {len(results)}건 관련")
-                except Exception as e:
-                    print(f"  [bizinfo] '{keyword}' 오류: {e}")
+            with new_page() as page:
+                for keyword in _SEARCH_TERMS:
+                    try:
+                        results = self._fetch_keyword(page, keyword)
+                        postings.extend(results)
+                        print(f"  [bizinfo] '{keyword}' → {len(results)}건 관련")
+                    except Exception as e:
+                        print(f"  [bizinfo] '{keyword}' 오류: {e}")
         except Exception as e:
             print(f"[bizinfo] 크롤링 오류: {e}")
-        finally:
-            browser.close()
 
         return self._deduplicate(postings)
 
@@ -67,24 +54,23 @@ class BizinfoCrawler(BaseCrawler):
             or page.query_selector_all("table tbody tr")
             or page.query_selector_all(".boardList li")
         )
-
         for row in rows:
             title_el = row.query_selector("td.subject a, td.tit a, td a")
             if not title_el:
                 continue
-
             title = title_el.inner_text().strip()
             if not title or "등록된" in title:
                 continue
 
-            # 1단계: 제목 필터
             title_result = is_relevant(title)
             if title_result.stage == "excluded" or not title_result.matched:
                 continue
 
             href = title_el.get_attribute("href") or ""
-            full_url = href if href.startswith("http") else f"https://www.bizinfo.go.kr{href}"
-
+            full_url = (
+                href if href.startswith("http")
+                else f"https://www.bizinfo.go.kr{href}"
+            )
             cells = row.query_selector_all("td")
             deadline = self._find_deadline_cell(cells)
 
@@ -99,45 +85,37 @@ class BizinfoCrawler(BaseCrawler):
             ))
         return postings
 
-    def fetch_detail(self, page, posting: Posting) -> Optional[str]:
-        """상세 페이지 방문 → 본문 텍스트 추출."""
+    def enrich_with_content(self, postings: List[Posting]) -> List[Posting]:
+        """상세 페이지 본문으로 2단계 필터링 (--deep 옵션 시 호출)."""
+        enriched = []
+        try:
+            with new_page() as page:
+                for p in postings:
+                    content = self._fetch_detail(page, p)
+                    if not content:
+                        enriched.append(p)
+                        continue
+                    result = is_relevant(p.title, content)
+                    if result.matched:
+                        p.description = content[:500]
+                        p.relevance_score = result.score
+                        p.matched_keywords = result.matched_keywords
+                        enriched.append(p)
+        except Exception as e:
+            print(f"[bizinfo] enrich 오류: {e}")
+        return enriched
+
+    def _fetch_detail(self, page, posting: Posting) -> Optional[str]:
         try:
             page.goto(posting.url, timeout=20000, wait_until="domcontentloaded")
             page.wait_for_timeout(1500)
-            # 본문 영역 셀렉터 (기업마당 구조에 맞게)
             content_el = (
                 page.query_selector(".view-content, .bbs-view, #viewContent, .cont-area")
                 or page.query_selector("table.tblView, .detail-wrap")
             )
-            if content_el:
-                return content_el.inner_text()
-            # 폴백: 전체 body 텍스트
-            return page.inner_text("body")
+            return content_el.inner_text() if content_el else page.inner_text("body")
         except Exception:
             return None
-
-    def enrich_with_content(self, postings: List[Posting]) -> List[Posting]:
-        """목록에서 수집한 공고를 상세 페이지 본문으로 2단계 필터링.
-
-        main.py에서 --deep 옵션 시 호출.
-        """
-        page, browser = new_page()
-        enriched = []
-        try:
-            for p in postings:
-                content = self.fetch_detail(page, p)
-                if not content:
-                    enriched.append(p)
-                    continue
-                result = is_relevant(p.title, content)
-                if result.matched:
-                    p.description = content[:500]  # 본문 앞부분만 저장
-                    p.relevance_score = result.score
-                    p.matched_keywords = result.matched_keywords
-                    enriched.append(p)
-        finally:
-            browser.close()
-        return enriched
 
     def _find_deadline_cell(self, cells) -> str:
         for cell in cells:
