@@ -44,9 +44,11 @@ def diagnose(site_id: str, url: str):
             # 페이지 제목
             print(f"제목: {page.title()}")
 
-            # iframe 개수
+            # iframe 개수 및 URL
             frames = page.frames
             print(f"iframe 수: {len(frames)}")
+            for i, f in enumerate(frames):
+                print(f"  frame[{i}]: {f.url[:100]}")
 
             # 테이블 개수 및 구조
             tables = page.query_selector_all("table")

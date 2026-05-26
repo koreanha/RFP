@@ -1,4 +1,9 @@
-"""기업마당 크롤러 — playwright 브라우저 직접 탐색 방식."""
+"""기업마당 크롤러.
+
+검색창에 키워드를 직접 입력하는 방식 사용.
+URL 파라미터 검색은 기업마당에서 무시됨.
+테이블 컬럼 구조: 번호 | 지원분야 | 지원사업명(링크) | 신청기간 | 소관부처 | 수행기관 | 등록일 | 조회수
+"""
 import hashlib
 from typing import List, Optional
 from models.posting import Posting
@@ -30,13 +35,23 @@ class BizinfoCrawler(BaseCrawler):
                         print(f"  [bizinfo] '{keyword}' 오류: {e}")
         except Exception as e:
             print(f"[bizinfo] 크롤링 오류: {e}")
-
         return self._deduplicate(postings)
 
     def _fetch_keyword(self, page, keyword: str) -> List[Posting]:
-        url = f"{_SEARCH_BASE}?pageIndex=1&searchCnd=0&searchWrd={keyword}"
-        page.goto(url, timeout=30000, wait_until="domcontentloaded")
-        page.wait_for_timeout(2000)
+        # 검색 목록 페이지로 이동
+        page.goto(_SEARCH_BASE, timeout=30000, wait_until="domcontentloaded")
+        page.wait_for_timeout(1500)
+
+        # 검색창에 키워드 직접 입력 후 Enter
+        inp = page.query_selector("input[placeholder='검색어를 입력해 주세요.']")
+        if not inp:
+            print(f"  [bizinfo] 검색창을 찾지 못함")
+            return []
+        inp.triple_click()
+        inp.fill(keyword)
+        page.keyboard.press("Enter")
+        page.wait_for_load_state("networkidle", timeout=12000)
+        page.wait_for_timeout(1000)
 
         postings = []
         for page_no in range(1, _MAX_PAGES + 1):
@@ -47,15 +62,19 @@ class BizinfoCrawler(BaseCrawler):
         return postings
 
     def _parse_rows(self, page) -> List[Posting]:
+        """
+        테이블 컬럼 순서:
+          [0] 번호  [1] 지원분야  [2] 지원사업명(링크)
+          [3] 신청기간  [4] 소관부처·지자체  [5] 사업수행기관
+        """
         postings = []
-        rows = (
-            page.query_selector_all("#boardList tbody tr")
-            or page.query_selector_all("table.tblList tbody tr")
-            or page.query_selector_all("table tbody tr")
-            or page.query_selector_all(".boardList li")
-        )
+        rows = page.query_selector_all("table tbody tr")
         for row in rows:
-            title_el = row.query_selector("td.subject a, td.tit a, td a")
+            cells = row.query_selector_all("td")
+            if len(cells) < 3:
+                continue
+            # 3번째 셀(index 2): 지원사업명
+            title_el = cells[2].query_selector("a")
             if not title_el:
                 continue
             title = title_el.inner_text().strip()
@@ -71,8 +90,8 @@ class BizinfoCrawler(BaseCrawler):
                 href if href.startswith("http")
                 else f"https://www.bizinfo.go.kr{href}"
             )
-            cells = row.query_selector_all("td")
-            deadline = self._find_deadline_cell(cells)
+            deadline = cells[3].inner_text().strip() if len(cells) > 3 else None
+            org = cells[4].inner_text().strip() if len(cells) > 4 else None
 
             postings.append(Posting(
                 source_id=self.site_id,
@@ -80,13 +99,13 @@ class BizinfoCrawler(BaseCrawler):
                 title=title,
                 url=full_url,
                 deadline=deadline,
+                organization=org,
                 relevance_score=title_result.score,
                 matched_keywords=title_result.matched_keywords,
             ))
         return postings
 
     def enrich_with_content(self, postings: List[Posting]) -> List[Posting]:
-        """상세 페이지 본문으로 2단계 필터링 (--deep 옵션 시 호출)."""
         enriched = []
         try:
             with new_page() as page:
@@ -117,19 +136,10 @@ class BizinfoCrawler(BaseCrawler):
         except Exception:
             return None
 
-    def _find_deadline_cell(self, cells) -> str:
-        for cell in cells:
-            text = cell.inner_text().strip()
-            if len(text) >= 10 and (text.count("-") >= 1 or text.count(".") >= 1):
-                if any(c.isdigit() for c in text[:4]):
-                    return text
-        return ""
-
     def _go_next_page(self, page, current_page: int) -> bool:
         nxt = page.query_selector(
-            f".pagination a:has-text('{current_page + 1}'), "
-            f"#pagination a:has-text('{current_page + 1}'), "
-            f"a.next, a[title='다음페이지']"
+            f"a:has-text('{current_page + 1}'), "
+            f"a.next, a[title='다음페이지'], a[title='다음']"
         )
         if nxt:
             nxt.click()
@@ -139,9 +149,11 @@ class BizinfoCrawler(BaseCrawler):
         return False
 
     def _extract_post_id(self, href: str) -> str:
-        for sep in ["pblancId=", "bbsIdx=", "seq=", "idx=", "nttId="]:
+        for sep in ["pblancId=", "bbsIdx=", "hashCode=", "seq=", "idx=", "nttId="]:
             if sep in href:
-                return href.split(sep)[-1].split("&")[0]
+                val = href.split(sep)[-1].split("&")[0]
+                if val:
+                    return val
         return ""
 
     def _hash(self, text: str) -> str:
