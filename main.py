@@ -13,6 +13,9 @@ import logging
 import sys
 from datetime import datetime
 from pathlib import Path
+
+from dotenv import load_dotenv
+load_dotenv()  # 프로젝트 루트의 .env 자동 로드
 from typing import List
 
 import yaml
