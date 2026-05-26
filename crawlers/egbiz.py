@@ -57,12 +57,16 @@ class EgbizCrawler(BaseCrawler):
             or page.query_selector("input[name='searchNm']")
         )
         if inp:
+            ph = inp.get_attribute("placeholder") or inp.get_attribute("name") or "?"
+            print(f"  [egbiz] 검색창 발견: '{ph}'")
             inp.triple_click()
             inp.fill(keyword)
             page.keyboard.press("Enter")
             page.wait_for_timeout(3000)  # SPA 렌더링 대기
         else:
-            print(f"  [egbiz] 검색창 없음 — 전체 목록 파싱")
+            all_inputs = page.query_selector_all("input[type='text'], input:not([type]), input[type='search']")
+            names = [el.get_attribute("placeholder") or el.get_attribute("name") or "?" for el in all_inputs]
+            print(f"  [egbiz] 검색창 없음. 발견된 input: {names}")
 
         return self._parse_all_contexts(page)
 
@@ -80,14 +84,20 @@ class EgbizCrawler(BaseCrawler):
     def _parse_context(self, ctx) -> List[Posting]:
         # 카드/리스트형 아이템 탐색
         items = []
+        matched_sel = None
         for sel in _CARD_SELECTORS:
             items = ctx.query_selector_all(sel)
             if items:
+                matched_sel = sel
                 break
 
         # 카드도 없으면 테이블 tr로 폴백
         if not items:
             items = ctx.query_selector_all("table tbody tr")
+            matched_sel = "table tbody tr" if items else None
+
+        if matched_sel:
+            print(f"  [egbiz] 셀렉터='{matched_sel}' 아이템={len(items)}개")
 
         postings = []
         for item in items:

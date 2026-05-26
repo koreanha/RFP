@@ -51,8 +51,12 @@ class G2BCrawler(BaseCrawler):
             # 홈에서 입찰공고목록 메뉴 클릭 시도
             ctx, inp = self._try_from_home(page)
             if ctx is None or inp is None:
-                print(f"  [g2b] 검색창을 찾지 못함")
+                frames_info = [(i, f.url[:60]) for i, f in enumerate(page.frames)]
+                print(f"  [g2b] 검색창 없음. frames: {frames_info}")
                 return []
+
+        ph = inp.get_attribute("placeholder") or inp.get_attribute("name") or "?"
+        print(f"  [g2b] 검색창 발견: '{ph}' (frame: {ctx.url[:60] if hasattr(ctx, 'url') else 'main'})")
 
         inp.triple_click()
         inp.fill(keyword)
@@ -123,6 +127,8 @@ class G2BCrawler(BaseCrawler):
         for ctx in contexts:
             try:
                 rows = ctx.query_selector_all("table tbody tr")
+                if rows:
+                    print(f"  [g2b] 테이블 행={len(rows)}개 (frame: {ctx.url[:50]})")
                 for row in rows:
                     p = self._parse_row(row)
                     if p:

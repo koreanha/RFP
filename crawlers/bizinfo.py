@@ -46,14 +46,18 @@ class BizinfoCrawler(BaseCrawler):
         inp = (
             page.query_selector("input[name='keyword']")
             or page.query_selector("input[placeholder='검색어를 입력해 주세요.']")
+            or page.query_selector("input[name*='search'], input[name*='word']")
         )
         if not inp:
-            print(f"  [bizinfo] 검색창을 찾지 못함")
+            # 모든 text input 출력 (디버그)
+            all_inputs = page.query_selector_all("input[type='text'], input:not([type])")
+            names = [el.get_attribute("name") or el.get_attribute("placeholder") or "?" for el in all_inputs]
+            print(f"  [bizinfo] 검색창 없음. 발견된 input: {names}")
             return []
+        print(f"  [bizinfo] 검색창 발견 name='{inp.get_attribute('name')}'")
         inp.fill(keyword)   # fill()은 기존 내용을 지우고 교체
         page.keyboard.press("Enter")
-        page.wait_for_load_state("networkidle", timeout=12000)
-        page.wait_for_timeout(1000)
+        page.wait_for_timeout(4000)  # networkidle 대신 고정 대기 (AJAX 렌더링)
 
         postings = []
         for page_no in range(1, _MAX_PAGES + 1):
@@ -71,6 +75,7 @@ class BizinfoCrawler(BaseCrawler):
         """
         postings = []
         rows = page.query_selector_all("table tbody tr")
+        print(f"  [bizinfo] 테이블 행 수: {len(rows)}")
         for row in rows:
             cells = row.query_selector_all("td")
             if len(cells) < 3:

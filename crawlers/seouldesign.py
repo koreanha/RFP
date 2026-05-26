@@ -4,13 +4,13 @@
 - URL: menuno=18 (입찰정보 게시판)
 - 테이블 컬럼: [0]번호 [1]제목(링크) [2]첨부파일 [3]조회수 [4]등록일
 - 링크는 tbody tr > td:nth-child(2) > a 에 위치
+- 서울디자인재단 자체가 디자인 전문기관 → 별도 키워드 필터 없이 전체 수집
 """
 import hashlib
 from typing import List
 from models.posting import Posting
 from crawlers.base import BaseCrawler
 from utils.browser import new_page
-from filter import is_relevant
 
 _LIST_URL = "https://seouldesign.or.kr/?menuno=18&siteno=1&boardno=19&cates=132"
 _BASE = "https://seouldesign.or.kr"
@@ -42,12 +42,14 @@ class SeoulDesignCrawler(BaseCrawler):
         """
         테이블 컬럼: [0]번호 [1]제목(링크) [2]첨부파일 [3]조회수 [4]등록일
         메인 페이지와 iframe 모두 시도.
+        서울디자인재단은 전체 공고 수집 (키워드 필터 미적용).
         """
         postings = []
         contexts = [page] + [f for f in page.frames if f != page.main_frame]
         for ctx in contexts:
             try:
                 rows = ctx.query_selector_all("table tbody tr")
+                print(f"  [seouldesign] 테이블 행 수: {len(rows)} (frame url: {ctx.url[:60]})")
                 if not rows:
                     continue
                 for row in rows:
@@ -56,13 +58,12 @@ class SeoulDesignCrawler(BaseCrawler):
                         continue
                     title_el = cells[1].query_selector("a")
                     if not title_el:
+                        # cells[0]에 링크가 있을 수도 있음
+                        title_el = cells[0].query_selector("a")
+                    if not title_el:
                         continue
                     title = title_el.inner_text().strip()
                     if not title or len(title) < 4 or title.isdigit():
-                        continue
-
-                    result = is_relevant(title)
-                    if not result.matched or result.stage == "excluded":
                         continue
 
                     href = title_el.get_attribute("href") or ""
@@ -76,12 +77,13 @@ class SeoulDesignCrawler(BaseCrawler):
                         title=title,
                         url=full_url,
                         deadline=deadline,
-                        relevance_score=result.score,
-                        matched_keywords=result.matched_keywords,
+                        relevance_score=1,
+                        matched_keywords=["seouldesign"],
                     ))
                 if postings:
                     break  # 첫 번째 유효한 context 사용
-            except Exception:
+            except Exception as e:
+                print(f"  [seouldesign] frame 파싱 오류: {e}")
                 continue
         return postings
 
